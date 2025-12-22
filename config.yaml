@@ -1,0 +1,43 @@
+# Claude Code Bot 配置文件
+
+# Bot 配置
+bot:
+  trigger_keyword: "claude code"    # 触发关键词
+  default_timeout: 180              # 默认超时时间（秒）
+  max_output_length: 3000           # 最大输出长度
+  workspace: "."                    # 工作目录
+
+# IM 平台配置（可启用多个）
+im:
+  feishu:
+    enabled: true
+    # 以下配置可通过环境变量覆盖：
+    # FEISHU_APP_ID, FEISHU_APP_SECRET
+    app_id: ""
+    app_secret: ""
+
+  # 钉钉（待实现）
+  # dingtalk:
+  #   enabled: false
+  #   app_key: ""
+  #   app_secret: ""
+
+  # Slack（待实现）
+  # slack:
+  #   enabled: false
+  #   bot_token: ""
+  #   app_token: ""
+
+# CLI 工具配置
+cli:
+  active: claude_code               # 当前使用的 CLI 工具
+
+  claude_code:
+    path: /opt/homebrew/bin/claude
+    default_args:
+      - "--dangerously-skip-permissions"
+
+  # Aider（待实现）
+  # aider:
+  #   path: /usr/local/bin/aider
+  #   model: "gpt-4"
