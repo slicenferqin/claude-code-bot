@@ -4,45 +4,130 @@
 
 通过 IM 消息触发本地 CLI 工具（如 Claude Code），随时随地远程操控你的开发环境。
 
+**场景示例**：在外面没带电脑，收到线上紧急 bug 反馈，直接在飞书发送 Jira 链接给机器人，让 Claude Code 自动修复、你审阅 diff、确认后提交部署。
+
 ## 功能特性
+
+### 已实现
 
 - **插件化架构** - 支持多 IM 平台和多 CLI 工具扩展
 - **会话上下文保持** - 基于 session-id 维持对话上下文，支持多轮对话
 - **多会话支持** - 不同的聊天窗口对应独立的 CLI 会话
 - **消息去重** - 自动过滤重复消息，避免重复执行
-- **超时控制** - 可配置的执行超时保护
-- **实时反馈** - 即时返回"处理中"状态和执行结果
+
+### 开发中 (V2)
+
+- **Hook 集成** - 通过 Claude Code Hooks 实现双向通信
+- **异步任务执行** - 后台执行，不阻塞，无超时限制
+- **实时进度推送** - CLI 执行进度主动推送到 IM
+- **权限确认** - CLI 需要确认时推送到 IM，支持长时间等待
+- **任务管理** - 查看状态、取消任务、回滚改动
+- **交互式命令** - diff/commit/push/rollback/continue 等操作
+
+## Roadmap
+
+```
+V1 (当前)
+├── ✅ 插件化架构
+├── ✅ 飞书 IM 集成
+├── ✅ Claude Code CLI 集成
+└── ✅ 基础消息交互
+
+V2 (开发中)
+├── 🚧 IPC 双向通信 (Unix Socket)
+├── 🚧 Claude Code Hooks 集成
+├── 🚧 异步任务执行
+├── 🚧 实时进度推送
+├── 🚧 权限确认流程
+├── 🚧 任务取消与回滚
+└── 🚧 交互式命令 (diff/commit/push)
+
+V3 (计划中)
+├── 📋 飞书卡片交互
+├── 📋 更多 IM 平台 (钉钉/Slack/Telegram)
+├── 📋 更多 CLI 工具 (Aider/Cursor)
+├── 📋 多项目管理
+└── 📋 CI/CD 集成
+```
+
+## V2 交互预览
+
+```
+你: claude code 修复 src/api/handler.py 中的空指针异常
+
+Bot: 🚀 任务已启动，正在分析问题...
+
+--- 1 分钟后 ---
+
+Bot: ⚠️ Claude 请求执行：
+
+     工具: Edit
+     文件: src/api/handler.py
+
+     回复 "ok" 批准，"no" 拒绝
+
+你: ok
+
+Bot: ✅ 已批准，继续执行...
+
+--- 2 分钟后 ---
+
+Bot: ✅ 任务完成
+
+     修改了 1 个文件：
+     - src/api/handler.py (+5, -1)
+
+     回复：
+     - "diff" 查看改动
+     - "commit 消息" 提交
+     - "cancel" 撤销
+
+你: diff
+
+Bot: 📄 src/api/handler.py
+
+     @@ -25,7 +25,11 @@
+      def process_request(data):
+     -    result = data.get("value").process()
+     +    value = data.get("value")
+     +    if value is None:
+     +        raise ValueError("value is required")
+     +    result = value.process()
+
+你: commit 修复空指针异常
+
+Bot: ✅ 已提交: def4567
+
+     回复 "push" 推送到远程
+```
 
 ## 架构
 
+### V1 架构（当前）
+
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Claude Code Bot                          │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐        │
-│  │   Feishu    │     │  DingTalk   │     │    Slack    │  ...   │
-│  │   Plugin    │     │   Plugin    │     │   Plugin    │        │
-│  └──────┬──────┘     └──────┬──────┘     └──────┬──────┘        │
-│         │                   │                   │                │
-│         └───────────────────┼───────────────────┘                │
-│                             ▼                                    │
-│                    ┌─────────────────┐                           │
-│                    │   Bot Core      │                           │
-│                    │  - 消息路由      │                           │
-│                    │  - 会话管理      │                           │
-│                    │  - 插件注册      │                           │
-│                    └────────┬────────┘                           │
-│                             │                                    │
-│         ┌───────────────────┼───────────────────┐                │
-│         │                   │                   │                │
-│         ▼                   ▼                   ▼                │
-│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐        │
-│  │ Claude Code │     │    Aider    │     │   Cursor    │  ...   │
-│  │   Plugin    │     │   Plugin    │     │   Plugin    │        │
-│  └─────────────┘     └─────────────┘     └─────────────┘        │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────┐     WebSocket      ┌─────────────┐  subprocess   ┌─────────────┐
+│   飞书 App   │ ◄───────────────► │   Bot 服务   │ ───────────► │ Claude Code │
+└─────────────┘                    └─────────────┘               └─────────────┘
+```
+
+### V2 架构（开发中）
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              本地机器                                    │
+│                                                                         │
+│   ┌─────────────┐          ┌─────────────┐          ┌─────────────┐    │
+│   │ Claude Code │ ──Hook──►│  Hook 脚本   │◄──IPC──►│   Bot 服务   │    │
+│   └─────────────┘          └─────────────┘          └──────┬──────┘    │
+│                                                            │           │
+│                                    WebSocket 长连接         │           │
+└────────────────────────────────────────┬───────────────────┘           │
+                                         │                               │
+                                         ▼                               │
+                                 ┌─────────────┐                         │
+                                 │  飞书服务器  │◄────────────► 你的手机   │
+                                 └─────────────┘                         │
 ```
 
 ## 目录结构
@@ -57,7 +142,10 @@ claude-code-bot/
 │   ├── bot.py              # Bot 主逻辑
 │   ├── session.py          # 会话管理
 │   ├── config.py           # 配置加载
-│   └── registry.py         # 插件注册中心
+│   ├── registry.py         # 插件注册中心
+│   ├── ipc_server.py       # IPC 服务端 (V2)
+│   ├── task_manager.py     # 任务管理 (V2)
+│   └── permission_manager.py # 权限确认 (V2)
 │
 ├── interfaces/             # 抽象接口
 │   ├── im.py               # IM 平台接口
@@ -69,8 +157,14 @@ claude-code-bot/
 │   └── cli/
 │       └── claude_code.py  # Claude Code 插件
 │
-└── utils/                  # 工具函数
-    └── helpers.py
+├── hooks/                  # Hook 脚本 (V2)
+│   ├── ipc_client.py
+│   ├── on_stop.py
+│   ├── on_permission.py
+│   └── on_tool_complete.py
+│
+└── docs/
+    └── DESIGN_V2.md        # V2 技术设计文档
 ```
 
 ## 支持的平台
@@ -80,41 +174,36 @@ claude-code-bot/
 | 平台 | 状态 | 说明 |
 |------|------|------|
 | 飞书 | ✅ 已实现 | 支持私聊和群聊 |
-| 钉钉 | 🚧 待实现 | - |
-| Slack | 🚧 待实现 | - |
-| Telegram | 🚧 待实现 | - |
+| 钉钉 | 📋 计划中 | - |
+| Slack | 📋 计划中 | - |
+| Telegram | 📋 计划中 | - |
 
 ### CLI 工具
 
 | 工具 | 状态 | 说明 |
 |------|------|------|
 | Claude Code | ✅ 已实现 | Anthropic 官方 CLI |
-| Aider | 🚧 待实现 | - |
-| Cursor | 🚧 待实现 | - |
+| Aider | 📋 计划中 | - |
+| Cursor | 📋 计划中 | - |
 
-## 前置要求
+## 快速开始
+
+### 前置要求
 
 - Python 3.8+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) 已安装并配置
 - 飞书开放平台应用（需要机器人能力）
 - Anthropic API Key
 
-## 安装
-
-1. 克隆仓库
+### 安装
 
 ```bash
 git clone git@github.com:slicenferqin/claude-code-bot.git
 cd claude-code-bot
-```
-
-2. 安装依赖
-
-```bash
 pip install -r requirements.txt
 ```
 
-3. 配置环境变量
+### 配置
 
 ```bash
 export FEISHU_APP_ID="your_app_id"
@@ -122,7 +211,19 @@ export FEISHU_APP_SECRET="your_app_secret"
 export ANTHROPIC_API_KEY="your_anthropic_api_key"
 ```
 
-4. （可选）修改配置文件 `config.yaml`
+### 运行
+
+```bash
+python main.py
+```
+
+### 使用
+
+在飞书中发送：
+
+```
+claude code 帮我写一个 hello world
+```
 
 ## 飞书应用配置
 
@@ -137,50 +238,25 @@ export ANTHROPIC_API_KEY="your_anthropic_api_key"
    - `im:message:send_as_bot`
 6. 发布应用版本并审核通过
 
-## 使用方法
-
-1. 启动 Bot
-
-```bash
-python main.py
-```
-
-2. 在飞书中与机器人对话，发送包含 `claude code` 的消息：
-
-```
-claude code 帮我写一个 hello world
-```
-
-```
-claude code 查看当前目录有哪些文件
-```
-
-```
-claude code 解释一下 main.py 的代码逻辑
-```
-
 ## 配置文件
 
-`config.yaml` 支持以下配置：
-
 ```yaml
-# Bot 配置
-bot:
-  trigger_keyword: "claude code"  # 触发关键词
-  default_timeout: 180            # 超时时间（秒）
-  max_output_length: 3000         # 最大输出长度
-  workspace: "."                  # 工作目录
+# config.yaml
 
-# IM 平台配置
+bot:
+  trigger_keyword: "claude code"
+  default_timeout: 180
+  max_output_length: 3000
+  workspace: "."
+
 im:
   feishu:
     enabled: true
     app_id: ""      # 或使用环境变量 FEISHU_APP_ID
     app_secret: ""  # 或使用环境变量 FEISHU_APP_SECRET
 
-# CLI 工具配置
 cli:
-  active: claude_code  # 当前使用的 CLI
+  active: claude_code
   claude_code:
     path: /opt/homebrew/bin/claude
     default_args:
@@ -240,12 +316,14 @@ class AiderCLI(CLITool):
         pass
 ```
 
-## 注意事项
+## 贡献
 
-- Bot 运行在本地，需要保持程序运行才能响应消息
-- CLI 工具会在 Bot 启动的工作目录下执行操作
-- 默认超时时间为 3 分钟，可在配置文件中调整
-- 输出超过 3000 字符会自动截断
+欢迎提交 Issue 和 Pull Request！
+
+特别欢迎：
+- 新的 IM 平台插件（钉钉、Slack、Telegram 等）
+- 新的 CLI 工具插件（Aider、Cursor 等）
+- Bug 修复和功能优化
 
 ## License
 
