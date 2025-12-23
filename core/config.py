@@ -1,4 +1,4 @@
-"""配置加载"""
+"""配置加载 V2"""
 
 import os
 from dataclasses import dataclass, field
@@ -15,6 +15,11 @@ class BotConfig:
     default_timeout: int = 180
     max_output_length: int = 3000
     workspace: str = "."
+
+    # V2 新增配置
+    max_concurrent_tasks: int = 3
+    permission_timeout: float = 3600
+    auto_setup_hooks: bool = True
 
 
 @dataclass
@@ -35,12 +40,20 @@ class ClaudeCodeConfig:
 
 
 @dataclass
+class HooksConfig:
+    """Hook 配置"""
+
+    project_dir: str = ""
+
+
+@dataclass
 class Config:
     """总配置"""
 
     bot: BotConfig = field(default_factory=BotConfig)
     im: Dict[str, Any] = field(default_factory=dict)
     cli: Dict[str, Any] = field(default_factory=dict)
+    hooks: HooksConfig = field(default_factory=HooksConfig)
 
     @classmethod
     def load(cls, config_path: str = "config.yaml") -> "Config":
@@ -61,13 +74,28 @@ class Config:
 
             # 解析 bot 配置
             if "bot" in data:
-                config.bot = BotConfig(**data["bot"])
+                bot_data = data["bot"]
+                config.bot = BotConfig(
+                    trigger_keyword=bot_data.get("trigger_keyword", "claude code"),
+                    default_timeout=bot_data.get("default_timeout", 180),
+                    max_output_length=bot_data.get("max_output_length", 3000),
+                    workspace=bot_data.get("workspace", "."),
+                    max_concurrent_tasks=bot_data.get("max_concurrent_tasks", 3),
+                    permission_timeout=bot_data.get("permission_timeout", 3600),
+                    auto_setup_hooks=bot_data.get("auto_setup_hooks", True),
+                )
 
             # 解析 IM 配置
             config.im = data.get("im", {})
 
             # 解析 CLI 配置
             config.cli = data.get("cli", {})
+
+            # 解析 Hooks 配置
+            if "hooks" in data:
+                config.hooks = HooksConfig(
+                    project_dir=data["hooks"].get("project_dir", "")
+                )
 
         # 环境变量覆盖
         config._apply_env_overrides()

@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""Claude Code Bot 入口"""
+"""Claude Code Bot V2 入口
+
+支持功能：
+- 异步任务执行（不阻塞）
+- Hook 双向通信（进度、权限确认）
+- 文字命令交互（ok/no/diff/commit/push/rollback）
+- 任务管理（取消、继续）
+"""
 
 import os
 import sys
+import signal
 
 # 确保项目根目录在 Python 路径中
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -29,13 +37,16 @@ def main():
 
     cli_tool = cli_class(**cli_config)
 
-    # 创建 Bot
+    # 创建 Bot（V2 支持更多参数）
     bot = Bot(
         cli_tool=cli_tool,
         trigger_keyword=config.bot.trigger_keyword,
         workspace=config.bot.workspace,
         default_timeout=config.bot.default_timeout,
         max_output_length=config.bot.max_output_length,
+        max_concurrent_tasks=config.bot.max_concurrent_tasks,
+        permission_timeout=config.bot.permission_timeout,
+        auto_setup_hooks=config.bot.auto_setup_hooks,
     )
 
     # 添加 IM 平台
@@ -57,7 +68,18 @@ def main():
         print(f"[Main] 可用的 IM 插件: {PluginRegistry.list_im_plugins()}")
         sys.exit(1)
 
+    # 注册信号处理
+    def signal_handler(sig, frame):
+        print("\n[Main] 收到退出信号，正在停止...")
+        bot.stop()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     # 启动
+    print("[Main] Claude Code Bot V2 启动中...")
+    print("[Main] 支持命令: ok, no, cancel, diff, commit, push, rollback, continue, status")
     bot.start()
 
 

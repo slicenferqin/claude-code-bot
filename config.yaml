@@ -1,4 +1,4 @@
-# Claude Code Bot 配置文件
+# Claude Code Bot 配置文件 V2
 
 # Bot 配置
 bot:
@@ -6,6 +6,11 @@ bot:
   default_timeout: 180              # 默认超时时间（秒）
   max_output_length: 3000           # 最大输出长度
   workspace: "."                    # 工作目录
+
+  # V2 新增配置
+  max_concurrent_tasks: 3           # 最大并发任务数
+  permission_timeout: 3600          # 权限确认超时时间（秒），默认 1 小时
+  auto_setup_hooks: true            # 是否自动配置 Claude Code hooks
 
 # IM 平台配置（可启用多个）
 im:
@@ -36,8 +41,15 @@ cli:
     path: /opt/homebrew/bin/claude
     default_args:
       - "--dangerously-skip-permissions"
+    # 如果想启用权限确认流程，请注释掉上面的 --dangerously-skip-permissions
+    # 这样每次敏感操作都会通过 IM 请求你确认
 
   # Aider（待实现）
   # aider:
   #   path: /usr/local/bin/aider
   #   model: "gpt-4"
+
+# Hook 配置（高级）
+hooks:
+  # 留空则自动使用项目目录
+  project_dir: ""
