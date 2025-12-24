@@ -18,8 +18,8 @@ im:
     enabled: true
     # 以下配置可通过环境变量覆盖：
     # FEISHU_APP_ID, FEISHU_APP_SECRET
-    app_id: ""
-    app_secret: ""
+    app_id: "cli_a9cf9a400378dcd5"
+    app_secret: "5UAXq2VIWzcipW2IgsCKLgeW4poTnaA7"
 
   # 钉钉（待实现）
   # dingtalk:
@@ -38,9 +38,9 @@ cli:
   active: claude_code               # 当前使用的 CLI 工具
 
   claude_code:
-    path: /opt/homebrew/bin/claude
+    path: /opt/homebrew/Caskroom/claude-code/2.0.53/claude
     default_args:
-      - "--dangerously-skip-permissions"
+#      - "--dangerously-skip-permissions"
     # 如果想启用权限确认流程，请注释掉上面的 --dangerously-skip-permissions
     # 这样每次敏感操作都会通过 IM 请求你确认
 

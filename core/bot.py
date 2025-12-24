@@ -108,7 +108,14 @@ class Bot:
             print(f"[Bot] CLI 工具 {self.cli_tool.name} 不可用")
             return
 
-        # 配置 Hook
+        # 配置回调（用于 stream-json 模式）
+        if hasattr(self.cli_tool, 'set_callbacks'):
+            self.cli_tool.set_callbacks(
+                on_progress=self._on_task_progress,
+                on_complete=self._on_task_complete,
+            )
+
+        # 配置 Hook（可选，作为备用）
         if self.auto_setup_hooks:
             project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             if hasattr(self.cli_tool, 'setup_hooks'):
@@ -188,16 +195,10 @@ class Bot:
             self._handle_command(message, cmd, active_task)
             return
 
-        # 检查触发关键词
-        if self.trigger_keyword not in content_lower:
-            return
-
-        # 提取 prompt
-        # 找到关键词位置，提取之后的内容
-        keyword_pos = content_lower.find(self.trigger_keyword)
-        prompt = content[keyword_pos + len(self.trigger_keyword):].strip()
+        # 直接使用消息内容作为 prompt（不再需要触发关键词）
+        prompt = content.strip()
         if not prompt:
-            prompt = "hello"
+            return
 
         print(f"\n[Bot] 收到命令: {prompt[:100]}")
         print(f"[Bot] 消息 ID: {message.id}")
@@ -290,6 +291,9 @@ class Bot:
         if not platform:
             return
 
+        # 立即回复"思考中"（满足飞书3秒响应要求）
+        platform.send(message.chat_id, Reply(content="🤔 思考中..."))
+
         # 生成会话 ID
         session_id = self._session_manager.get_or_create_session_id(message.chat_id)
 
@@ -307,11 +311,6 @@ class Bot:
                 content="⚠️ 任务队列已满，请稍后再试"
             ))
             return
-
-        # 发送开始通知
-        platform.send(message.chat_id, Reply(
-            content=f"🚀 任务已启动\n\n📝 任务: {prompt}\n🔑 Session: {session_id[:8]}..."
-        ))
 
         # 异步执行
         try:
@@ -374,39 +373,30 @@ class Bot:
         platform.send(task.chat_id, Reply(content=msg))
 
     def _on_task_complete(self, payload: Dict[str, Any]) -> None:
-        """处理任务完成"""
+        """处理任务完成 - 发送 Claude 的回复内容"""
         session_id = payload.get("session_id", "")
         summary = payload.get("summary", "")
+        status = payload.get("status", "completed")
 
         task = self._task_manager.get_task(session_id)
         if not task:
             return
 
-        # 更新任务状态
-        files = GitOperations.get_changed_files(task.workspace)
-        self._task_manager.complete_task(session_id, summary, files)
-
         platform = self._get_platform_for_chat(task.chat_id)
         if not platform:
             return
 
-        # 构建完成消息
-        lines = ["✅ 任务完成"]
+        # 直接发送 Claude 的回复内容
+        if summary:
+            # 截断过长的内容
+            if len(summary) > self.max_output_length:
+                summary = summary[:self.max_output_length] + "\n\n... (内容已截断)"
 
-        if files:
-            lines.append(f"\n修改了 {len(files)} 个文件:")
-            for f in files[:5]:
-                lines.append(f"  - {f}")
-            if len(files) > 5:
-                lines.append(f"  ... 还有 {len(files) - 5} 个文件")
+            emoji = "✅" if status == "completed" else "❌"
+            platform.send(task.chat_id, Reply(content=f"{emoji} Claude:\n\n{summary}"))
 
-        lines.append("\n可用命令:")
-        lines.append("  diff - 查看改动")
-        lines.append("  commit <消息> - 提交代码")
-        lines.append("  rollback - 撤销改动")
-        lines.append("  continue <指令> - 继续修改")
-
-        platform.send(task.chat_id, Reply(content="\n".join(lines)))
+        # 更新任务状态
+        self._task_manager.complete_task(session_id, summary, [])
 
     def _on_permission_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """处理权限确认请求"""

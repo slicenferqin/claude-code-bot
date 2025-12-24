@@ -42,7 +42,16 @@ def main():
         # 如果没有输入或格式错误，静默退出
         sys.exit(0)
 
-    session_id = input_data.get("session_id", "")
+    # Debug: 打印收到的数据
+    with open("/tmp/claude-hook-debug.log", "a") as f:
+        f.write(f"on_tool_complete input: {json.dumps(input_data, indent=2)}\n\n")
+
+    # session_id 可能在不同字段中
+    session_id = (
+        input_data.get("session_id") or
+        input_data.get("sessionId") or
+        os.environ.get("CLAUDE_SESSION_ID", "")
+    )
     tool_name = input_data.get("tool_name", "")
     tool_input = input_data.get("tool_input", {})
     tool_output = input_data.get("tool_output", {})

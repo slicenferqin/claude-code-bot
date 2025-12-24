@@ -4,7 +4,8 @@ import json
 import os
 import re
 import subprocess
-from typing import List, Optional
+import threading
+from typing import List, Optional, Callable, Dict, Any
 
 from core.registry import PluginRegistry
 from interfaces.cli import CLITool, ExecutionResult, ExecutionStatus, AsyncExecutionHandle
@@ -33,6 +34,28 @@ class ClaudeCodeCLI(CLITool):
         self.path = path
         self.default_args = default_args or []
         self._project_dir: Optional[str] = None
+
+        # 事件回调
+        self._on_progress: Optional[Callable[[Dict[str, Any]], None]] = None
+        self._on_complete: Optional[Callable[[Dict[str, Any]], None]] = None
+        self._on_permission: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
+
+    def set_callbacks(
+        self,
+        on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
+        on_complete: Optional[Callable[[Dict[str, Any]], None]] = None,
+        on_permission: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+    ) -> None:
+        """设置事件回调
+
+        Args:
+            on_progress: 进度更新回调
+            on_complete: 任务完成回调
+            on_permission: 权限请求回调（返回决策）
+        """
+        self._on_progress = on_progress
+        self._on_complete = on_complete
+        self._on_permission = on_permission
 
     @property
     def name(self) -> str:
@@ -98,7 +121,8 @@ class ClaudeCodeCLI(CLITool):
     ) -> AsyncExecutionHandle:
         """异步执行 Claude Code 命令（不等待完成）
 
-        使用 Popen 启动进程，通过 Hook 机制获取进度和结果。
+        使用 --output-format stream-json 获取实时进度。
+        先尝试 --resume 恢复会话，如果失败则用 --session-id 创建新会话。
 
         Args:
             prompt: 用户输入的提示词
@@ -108,16 +132,15 @@ class ClaudeCodeCLI(CLITool):
         Returns:
             AsyncExecutionHandle: 异步执行句柄
         """
-        # 构建命令
-        cmd = self._build_command(prompt, session_id, use_resume=False)
-
-        # 设置环境变量，传递 session_id 给 Hook 脚本
+        # 设置环境变量
         env = os.environ.copy()
         env["CLAUDE_SESSION_ID"] = session_id
         if self._project_dir:
             env["CLAUDE_CODE_BOT_DIR"] = self._project_dir
 
-        # 使用 Popen 启动，不阻塞
+        # 先尝试 resume
+        cmd = self._build_command(prompt, session_id, use_resume=True, use_stream_json=True)
+
         process = subprocess.Popen(
             cmd,
             cwd=workspace,
@@ -127,21 +150,172 @@ class ClaudeCodeCLI(CLITool):
             env=env,
         )
 
+        # 启动后台线程读取和解析 JSON 流
+        reader_thread = threading.Thread(
+            target=self._read_stream_json,
+            args=(process, session_id, workspace, env, prompt),
+            daemon=True
+        )
+        reader_thread.start()
+
         return AsyncExecutionHandle(
             process=process,
             session_id=session_id,
             workspace=workspace,
         )
 
+    def _read_stream_json(
+        self,
+        process: subprocess.Popen,
+        session_id: str,
+        workspace: str = ".",
+        env: dict = None,
+        prompt: str = "",
+    ) -> None:
+        """读取并解析 stream-json 输出
+
+        如果会话不存在，自动用 --session-id 重试创建新会话。
+
+        Args:
+            process: 子进程
+            session_id: 会话 ID
+            workspace: 工作目录
+            env: 环境变量
+            prompt: 原始提示词（用于重试）
+        """
+        print(f"[ClaudeCode] Starting stream reader for session {session_id[:8]}...")
+        has_output = False
+
+        try:
+            for line in process.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+
+                has_output = True
+                print(f"[ClaudeCode] Received line: {line[:100]}...")
+                try:
+                    data = json.loads(line)
+                    self._handle_stream_event(data, session_id)
+                except json.JSONDecodeError:
+                    # 非 JSON 行，忽略
+                    print(f"[ClaudeCode] Non-JSON line: {line[:50]}")
+                    continue
+
+        except Exception as e:
+            print(f"[ClaudeCode] Stream reader error: {e}")
+
+        finally:
+            print(f"[ClaudeCode] Stream reader finished, has_output={has_output}")
+            # 确保读取完 stderr
+            stderr = process.stderr.read() if process.stderr else ""
+            if stderr:
+                print(f"[ClaudeCode] stderr: {stderr}")
+
+            # 检查是否需要重试（会话不存在）
+            if "No conversation found with session ID" in stderr and prompt:
+                print(f"[ClaudeCode] Session not found, creating new session...")
+                self._retry_with_new_session(prompt, session_id, workspace, env)
+
+    def _retry_with_new_session(
+        self,
+        prompt: str,
+        session_id: str,
+        workspace: str,
+        env: dict,
+    ) -> None:
+        """用 --session-id 创建新会话重试"""
+        # 用 --session-id 创建新会话
+        cmd = self._build_command(prompt, session_id, use_resume=False, use_stream_json=True)
+
+        process = subprocess.Popen(
+            cmd,
+            cwd=workspace,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+
+        # 递归调用，但不再传递 prompt 以防止无限循环
+        self._read_stream_json(process, session_id, workspace, env, prompt="")
+
+    def _handle_stream_event(self, data: Dict[str, Any], session_id: str) -> None:
+        """处理单个 stream 事件
+
+        Args:
+            data: JSON 事件数据
+            session_id: 会话 ID
+        """
+        event_type = data.get("type", "")
+
+        if event_type == "assistant":
+            # 助手消息（包含工具使用等）
+            message = data.get("message", {})
+            content = message.get("content", [])
+
+            for item in content:
+                if item.get("type") == "tool_use":
+                    # 工具开始使用
+                    tool_name = item.get("name", "unknown")
+                    if self._on_progress:
+                        self._on_progress({
+                            "session_id": session_id,
+                            "tool_name": tool_name,
+                            "status": "running",
+                            "output_preview": "",
+                        })
+
+        elif event_type == "tool_result":
+            # 工具执行结果
+            tool_name = data.get("tool", "")
+            is_error = data.get("is_error", False)
+            content = data.get("content", "")
+
+            if self._on_progress:
+                status = "failed" if is_error else "success"
+                preview = content[:200] if isinstance(content, str) else str(content)[:200]
+                self._on_progress({
+                    "session_id": session_id,
+                    "tool_name": tool_name,
+                    "status": status,
+                    "output_preview": preview,
+                })
+
+        elif event_type == "assistant":
+            # 助手文本响应
+            message = data.get("message", {})
+            content = message.get("content", [])
+
+            for item in content:
+                if item.get("type") == "text":
+                    # 提取助手的文本回复
+                    text = item.get("text", "")
+                    if text and self._on_complete:
+                        self._on_complete({
+                            "session_id": session_id,
+                            "status": "completed",
+                            "summary": text,  # 发送完整回复
+                        })
+
+        elif event_type == "result":
+            # 最终结果（如果之前没有发送过）
+            is_error = data.get("is_error", False)
+            result = data.get("result", "")
+
+            # result 类型通常包含最终回复，发送它
+            if result and self._on_complete:
+                self._on_complete({
+                    "session_id": session_id,
+                    "status": "failed" if is_error else "completed",
+                    "summary": result,  # 发送完整回复
+                })
+
     def is_available(self) -> bool:
         """检查 Claude Code CLI 是否可用"""
         # 检查命令是否存在
         if not os.path.exists(self.path):
-            return False
-
-        # 检查 API Key
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            print("[ClaudeCode] ANTHROPIC_API_KEY 未设置")
+            print(f"[ClaudeCode] 找不到 claude 命令: {self.path}")
             return False
 
         return True
@@ -238,7 +412,8 @@ class ClaudeCodeCLI(CLITool):
         self,
         prompt: str,
         session_id: str,
-        use_resume: bool = True
+        use_resume: bool = True,
+        use_stream_json: bool = False,
     ) -> List[str]:
         """构建命令行参数
 
@@ -246,6 +421,7 @@ class ClaudeCodeCLI(CLITool):
             prompt: 提示词
             session_id: 会话 ID
             use_resume: 是否使用 --resume（否则用 --session-id）
+            use_stream_json: 是否使用 stream-json 输出格式
 
         Returns:
             命令行参数列表
@@ -256,6 +432,10 @@ class ClaudeCodeCLI(CLITool):
             prompt,
             *self.default_args,
         ]
+
+        # 使用 stream-json 格式获取实时输出
+        if use_stream_json:
+            cmd.extend(["--output-format", "stream-json", "--verbose"])
 
         if use_resume:
             cmd.extend(["--resume", session_id])
