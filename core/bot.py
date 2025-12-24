@@ -215,7 +215,7 @@ class Bot:
 
         session_id = task.id
 
-        # 权限确认响应
+        # 权限确认响应 - 只有在确实有待确认的请求时才处理
         if self._command_parser.is_permission_response(cmd):
             pending = self._permission_manager.get_latest_pending(session_id)
             if pending:
@@ -223,8 +223,9 @@ class Bot:
                 self._permission_manager.respond(pending.request_id, decision)
                 emoji = "✅" if decision == "approve" else "❌"
                 platform.send(message.chat_id, Reply(content=f"{emoji} 已{decision}"))
-            else:
-                platform.send(message.chat_id, Reply(content="当前没有待确认的操作"))
+                return
+            # 没有待确认的请求，将消息转发给 Claude（不 return）
+            self._start_task(message, cmd.raw)
             return
 
         # 取消任务
